@@ -44,6 +44,9 @@ jobs:
       registry: ghcr.io
       platforms: linux/amd64,linux/arm64
       docker-compose-file-name: docker-compose.planeo.yaml
+      # The reusable OVERRIDES the compose service's context with this input (default `.`), so it must name the
+      # build context itself — go/, where go/Dockerfile lives (the compose file's `context: ./go` is for local builds).
+      docker-compose-context: go
       docker-compose-target-service: golang-adk
       image-name-suffix: golang-adk
       github-job-timeout-minutes: 45
