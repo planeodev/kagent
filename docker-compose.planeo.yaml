@@ -1,0 +1,21 @@
+# PLANEO FORK ONLY — never part of an upstream PR (fix branches are cut from upstream main, not planeo/main).
+# The images of OUR kagent integration branch `planeo/main` (= upstream main + the fixes we run until upstream
+# releases them — https://github.com/planeodev/kagent/pull/2: the remote-A2A tool's card token + caller tenant).
+# Built by .github/workflows/planeo-image-*.yml through the Vionix reusable
+# ohanalabs-ai/github-platform docker-multiarch-cicd.yaml → ghcr.io/planeodev/kagent/<service>:planeo-main-<sha7>
+# (the reusable slugs `planeo/main` to `planeo-main`; PR builds go to …/<service>/pr/<n>:<sha7>).
+# Same recipe as upstream's Makefile (`build-golang-adk`): go/Dockerfile with BUILD_PACKAGE; the generated protos are
+# committed, so no proto-generate step (upstream's CI skips it too).
+# Local build: docker compose -f docker-compose.planeo.yaml build golang-adk
+services:
+  # The Go ADK runtime — what a declarative kagent Agent runs (Harness `kagent: {}` image) and the library every
+  # `byo` Go-ADK agent compiles in. Our fixes live in go/adk, so this is the image that changes.
+  golang-adk:
+    image: ghcr.io/planeodev/kagent/golang-adk
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+      args:
+        BUILD_PACKAGE: adk/cmd/main.go
+        VERSION: planeo-main
+        LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=planeo-main
