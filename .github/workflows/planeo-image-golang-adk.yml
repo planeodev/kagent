@@ -1,7 +1,9 @@
-# 🍴 PLANEO FORK ONLY — the golang-adk image of our kagent integration branch `planeo/main`
-# (upstream main + https://github.com/planeodev/kagent/pull/2), as a THIN caller of the Vionix reusable
+# 🍴 PLANEO FORK ONLY — the golang-adk image of our kagent integration branches: `planeo/main` (upstream main + our
+# fixes — where upstream PRs are cut) and the release lines `planeo/v<kagent version>` (that tag + the same fixes — what
+# we RUN, paired with the kagent we deploy; e.g. planeo/v1.0.0-alpha13). A THIN caller of the Vionix reusable
 # ohanalabs-ai/github-platform docker-multiarch-cicd.yaml: the `golang-adk` service of docker-compose.planeo.yaml,
-# multi-arch → ghcr.io/planeodev/kagent/golang-adk:planeo-main-<sha7> on push (PRs: …/golang-adk/pr/<n>:<sha7>).
+# multi-arch → ghcr.io/planeodev/kagent/golang-adk:<branch slug>-<sha7> on push, e.g. planeo-main-<sha7>,
+# planeo-v1.0.0-alpha13-<sha7> (PRs: …/golang-adk/pr/<n>:<sha7>).
 # Pin it by that tag + its index digest (planeo-infra CLAUDE.md §9). Retire this file with the fork when upstream
 # releases the fixes (planeo-infra .github/upstream-watch-forks.yaml opens the issue).
 name: 🍴 planeo-image-golang-adk
@@ -9,14 +11,14 @@ run-name: "🍴 golang-adk (planeo fork) — ${{ github.event_name == 'pull_requ
 
 on:
   pull_request:
-    branches: [planeo/main]
+    branches: [planeo/main, 'planeo/v*']
     types: [opened, synchronize, reopened, closed]
     paths:
       - go/**
       - docker-compose.planeo.yaml
       - .github/workflows/planeo-image-golang-adk.yml
   push:
-    branches: [planeo/main]
+    branches: [planeo/main, 'planeo/v*']
     paths:
       - go/**
       - docker-compose.planeo.yaml
