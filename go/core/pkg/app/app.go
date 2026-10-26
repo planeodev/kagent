@@ -423,7 +423,7 @@ func Run(ctx context.Context, input *configv1.ControllerConfig, opts Options) er
 		mux.HandleFunc("GET /.well-known/jwks.json", http.NotFound)
 	}
 	mux.Handle("/mcp", otelhttp.NewHandler(auth.AuthnMiddleware(authenticator)(mcpHandler), "/mcp"))
-	mux.Handle(a2agateway.HTTPPathPrefix, otelhttp.NewHandler(a2agateway.NewHTTPHandler(gateway, authenticator, store), a2agateway.HTTPPathPrefix))
+	mux.Handle(a2agateway.HTTPPathPrefix, otelhttp.NewHandler(a2agateway.NewHTTPHandler(gateway, authenticator, store, runtimeauth.NewPeerDelegator(manager.GetClient())), a2agateway.HTTPPathPrefix))
 	server, err := grpcserver.New(grpcserver.Config{
 		MethodPolicies:        policies,
 		RegisterServices:      opts.GRPCServices,
