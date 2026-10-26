@@ -25,8 +25,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: planeo-image-controller-${{ github.ref }}
-  cancel-in-progress: true
+  # One group per EVENT; a push (release) build is never cancelled. A merged PR's `closed` run carries
+  # github.ref = the BASE branch, so `planeo-image-controller-${{ github.ref }}` + cancel-in-progress let the PR cleanup
+  # cancel the branch build (2026-10-26: push runs 40354547393 @9597a38 and 40108114969 @2e374a9).
+  group: planeo-image-controller-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
 
 jobs:
   build:
