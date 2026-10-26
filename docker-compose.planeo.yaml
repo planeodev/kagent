@@ -18,8 +18,12 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_PACKAGE: adk/cmd/main.go
-        VERSION: planeo-fork # the image TAG carries the branch + commit
-        LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=planeo-fork
+        # The UPSTREAM release this branch is based on, never a fork marker: the controller refuses to start
+        # when it differs from the chart's built-in Harness images release (go/core/pkg/app/images.go —
+        # planeo-prod 2026-10-26 CrashLoopBackOff with the former value). The fork identity lives in the
+        # image TAG (planeo-v<version>-<sha7>).
+        VERSION: v1.0.0-alpha17
+        LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=v1.0.0-alpha17
   # The kagent CONTROLLER — needed since the declared-peer A2A delegation (go/core/internal/runtimeauth/delegation.go,
   # upstream defers agentRef: https://github.com/kagent-dev/kagent/pull/3007). Same recipe as upstream's
   # `build-controller` (go/Dockerfile, BUILD_PACKAGE core/cmd/controller/main.go).
@@ -30,5 +34,5 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_PACKAGE: core/cmd/controller/main.go
-        VERSION: planeo-fork
-        LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=planeo-fork
+        VERSION: v1.0.0-alpha17 # == the upstream release; see golang-adk above
+        LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=v1.0.0-alpha17
