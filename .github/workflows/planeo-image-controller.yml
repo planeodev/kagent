@@ -1,0 +1,52 @@
+# 🍴 PLANEO FORK ONLY — the kagent CONTROLLER image of our integration branches (`planeo/main`, `planeo/v<kagent version>`).
+# Needed for the declared-peer A2A delegation (go/core/internal/runtimeauth/delegation.go; upstream defers agentRef,
+# https://github.com/kagent-dev/kagent/pull/3007). A THIN caller of the Vionix reusable
+# ohanalabs-ai/github-platform docker-multiarch-cicd.yaml: the `controller` service of docker-compose.planeo.yaml,
+# multi-arch → ghcr.io/planeodev/kagent/controller:<branch slug>-<sha7> on push (PRs: …/controller/pr/<n>:<sha7>).
+# Pin it by that tag + its index digest (planeo-infra CLAUDE.md §9). Retire it with the patch when upstream ships
+# Dedicated subagents.
+name: 🍴 planeo-image-controller
+run-name: "🍴 controller (planeo fork) — ${{ github.event_name == 'pull_request' && format('PR {0}', github.event.pull_request.number) || github.ref_name }}"
+
+on:
+  pull_request:
+    branches: [planeo/main, 'planeo/v*']
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - go/**
+      - docker-compose.planeo.yaml
+      - .github/workflows/planeo-image-controller.yml
+  push:
+    branches: [planeo/main, 'planeo/v*']
+    paths:
+      - go/**
+      - docker-compose.planeo.yaml
+      - .github/workflows/planeo-image-controller.yml
+  workflow_dispatch:
+
+concurrency:
+  group: planeo-image-controller-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: 🐳 build
+    uses: ohanalabs-ai/github-platform/.github/workflows/docker-multiarch-cicd.yaml@main
+    permissions:
+      contents: write # the reusable's release/tag steps
+      packages: write # push to ghcr.io
+      id-token: write # OIDC (build identity)
+      attestations: write # GitHub attestations (this fork is public)
+      artifact-metadata: write # SBOM metadata
+      pull-requests: write # PR comment with the image ref
+    with:
+      registry: ghcr.io
+      platforms: linux/amd64,linux/arm64
+      docker-compose-file-name: docker-compose.planeo.yaml
+      # The reusable OVERRIDES the compose service's context with this input (default `.`), so it must name the
+      # build context itself — go/, where go/Dockerfile lives (the compose file's `context: ./go` is for local builds).
+      docker-compose-context: go
+      docker-compose-target-service: controller
+      image-name-suffix: controller
+      github-job-timeout-minutes: 45
+    secrets: inherit

@@ -1,7 +1,7 @@
 # PLANEO FORK ONLY — never part of an upstream PR (fix branches are cut from upstream main, not planeo/main).
 # The images of OUR kagent integration branches — `planeo/main` (upstream main + our fixes) and the release lines
 # `planeo/v<kagent version>` (that tag + the same fixes; what we run) — https://github.com/planeodev/kagent/pull/2:
-# the remote-A2A tool's card token + caller tenant.
+# the remote-A2A tool's card token + caller tenant; and the declared-peer A2A delegation in the controller.
 # Built by .github/workflows/planeo-image-*.yml through the Vionix reusable
 # ohanalabs-ai/github-platform docker-multiarch-cicd.yaml → ghcr.io/planeodev/kagent/<service>:<branch slug>-<sha7>
 # (the reusable slugs `planeo/main` → `planeo-main`; PR builds go to …/<service>/pr/<n>:<sha7>).
@@ -19,4 +19,16 @@ services:
       args:
         BUILD_PACKAGE: adk/cmd/main.go
         VERSION: planeo-fork # the image TAG carries the branch + commit
+        LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=planeo-fork
+  # The kagent CONTROLLER — needed since the declared-peer A2A delegation (go/core/internal/runtimeauth/delegation.go,
+  # upstream defers agentRef: https://github.com/kagent-dev/kagent/pull/3007). Same recipe as upstream's
+  # `build-controller` (go/Dockerfile, BUILD_PACKAGE core/cmd/controller/main.go).
+  controller:
+    image: ghcr.io/planeodev/kagent/controller
+    build:
+      context: ./go
+      dockerfile: Dockerfile
+      args:
+        BUILD_PACKAGE: core/cmd/controller/main.go
+        VERSION: planeo-fork
         LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=planeo-fork
