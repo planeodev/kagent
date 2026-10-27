@@ -36,3 +36,12 @@ services:
         BUILD_PACKAGE: core/cmd/controller/main.go
         VERSION: v1.0.0-alpha17 # == the upstream release; see golang-adk above
         LDFLAGS: -X github.com/kagent-dev/kagent/go/core/internal/version.Version=v1.0.0-alpha17
+  # The Claude HARNESS image — needed while the fork carries kagent-dev/kagent#3099 (private Git skills): the
+  # task-time skill loader lives in go/harness/claude, so the stock harness image cannot load an authorized Git skill.
+  claude-harness:
+    image: ghcr.io/planeodev/kagent/claude-harness
+    build:
+      context: ./go
+      dockerfile: harness/claude/Dockerfile
+      args:
+        VERSION: v1.0.0-alpha17

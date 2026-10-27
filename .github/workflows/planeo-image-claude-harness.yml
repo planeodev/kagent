@@ -1,0 +1,54 @@
+# 🍴 PLANEO FORK ONLY — the kagent CLAUDE HARNESS image of our integration branches (`planeo/main`, `planeo/v<kagent version>`).
+# Needed while the fork carries https://github.com/kagent-dev/kagent/pull/3099 (private Git skill sources): the task-time
+# skill loader lives in go/harness/claude, so the stock harness image cannot load an authorized Git skill. A THIN caller
+# of the Vionix reusable ohanalabs-ai/github-platform docker-multiarch-cicd.yaml: the `claude-harness` service of
+# docker-compose.planeo.yaml, multi-arch → ghcr.io/planeodev/kagent/claude-harness:<branch slug>-<sha7> on push
+# (PRs: …/claude-harness/pr/<n>:<sha7>). Pin it by that tag + its index digest (planeo-infra CLAUDE.md §9; kagent's
+# Harness CRD requires the digest). Retire it when a kagent release ships 3099 (planeo-infra .github/upstream-watch-forks.yaml).
+name: 🍴 planeo-image-claude-harness
+run-name: "🍴 claude-harness (planeo fork) — ${{ github.event_name == 'pull_request' && format('PR {0}', github.event.pull_request.number) || github.ref_name }}"
+
+on:
+  pull_request:
+    branches: [planeo/main, 'planeo/v*']
+    types: [opened, synchronize, reopened, closed]
+    paths:
+      - go/**
+      - docker-compose.planeo.yaml
+      - .github/workflows/planeo-image-claude-harness.yml
+  push:
+    branches: [planeo/main, 'planeo/v*']
+    paths:
+      - go/**
+      - docker-compose.planeo.yaml
+      - .github/workflows/planeo-image-claude-harness.yml
+  workflow_dispatch:
+
+concurrency:
+  # One group per EVENT; a push (release) build is never cancelled, and a merged PR's `closed` run never cancels it
+  # (same rule as planeo-image-controller.yml, fork PR 14).
+  group: planeo-image-claude-harness-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
+
+jobs:
+  build:
+    name: 🐳 build
+    uses: ohanalabs-ai/github-platform/.github/workflows/docker-multiarch-cicd.yaml@main
+    permissions:
+      contents: write # the reusable's release/tag steps
+      packages: write # push to ghcr.io
+      id-token: write # OIDC (build identity)
+      attestations: write # GitHub attestations (this fork is public)
+      artifact-metadata: write # SBOM metadata
+      pull-requests: write # PR comment with the image ref
+    with:
+      registry: ghcr.io
+      platforms: linux/amd64,linux/arm64
+      docker-compose-file-name: docker-compose.planeo.yaml
+      # The reusable OVERRIDES the compose service's context with this input: go/ — the Dockerfile path
+      # (harness/claude/Dockerfile) is relative to it, exactly as upstream's build uses it.
+      docker-compose-context: go
+      docker-compose-target-service: claude-harness
+      image-name-suffix: claude-harness
+      github-job-timeout-minutes: 45
+    secrets: inherit
