@@ -259,6 +259,9 @@ func (c *Compiler) buildInputs(ctx context.Context, tree *resolvedTemplateTree) 
 	var build func(*resolvedTemplate) (*AgentInput, error)
 	build = func(agent *resolvedTemplate) (*AgentInput, error) {
 		template := agent.Template
+		if err := c.resolveGitSkillCredentials(template); err != nil {
+			return nil, err
+		}
 		input := &AgentInput{Template: template}
 		if template.Spec.ModelConfig != nil {
 			resolved, err := ResolveModelReference(c.ctx, c.collections, template.Namespace, *template.Spec.ModelConfig)
