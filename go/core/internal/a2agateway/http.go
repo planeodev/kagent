@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	a2atype "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	sessionsvc "github.com/kagent-dev/kagent/go/core/internal/service/session"
@@ -19,7 +21,13 @@ import (
 const HTTPPathPrefix = "/agents/"
 
 // NewHTTPHandler serves a card and JSON-RPC endpoint per named Agent.
-func NewHTTPHandler(gateway a2asrv.RequestHandler, authenticator auth.AuthProvider, shares sessionsvc.ShareStore) http.Handler {
+// PeerDelegator lets an authenticated actor reach a peer Agent it declares (Planeo fork patch, see
+// runtimeauth/delegation.go). A nil delegator keeps upstream behaviour.
+type PeerDelegator interface {
+	DelegatePeer(ctx context.Context, target types.NamespacedName) (context.Context, error)
+}
+
+func NewHTTPHandler(gateway a2asrv.RequestHandler, authenticator auth.AuthProvider, shares sessionsvc.ShareStore, peers ...PeerDelegator) http.Handler {
 	mux := http.NewServeMux()
 	rpc := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Bind this request's URL before entering the shared gateway. The SDK
@@ -82,6 +90,20 @@ func NewHTTPHandler(gateway a2asrv.RequestHandler, authenticator auth.AuthProvid
 			return
 		}
 		ctx := auth.ShareContextTo(r.Context(), share)
+		if share == nil {
+			if target, ok := agentFromPath(r.URL.Path); ok {
+				for _, peer := range peers {
+					if peer == nil {
+						continue
+					}
+					if ctx, err = peer.DelegatePeer(ctx, target); err != nil {
+						logging.FromContext(r.Context()).ErrorContext(r.Context(), "peer delegation failed", "error", err)
+						http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+						return
+					}
+				}
+			}
+		}
 		mux.ServeHTTP(w, r.WithContext(ctx))
 	}))
 }
@@ -101,4 +123,17 @@ func (h *httpAgentRoute) Before(ctx context.Context, callCtx *a2asrv.CallContext
 		return ctx, nil, a2atype.NewError(a2atype.ErrInvalidRequest, "tenant does not match the Agent URL")
 	}
 	return a2atype.AttachTenant(ctx, h.agent), nil, nil
+}
+
+// agentFromPath extracts <namespace>/<name> from /agents/<namespace>/<name>[/...].
+func agentFromPath(path string) (types.NamespacedName, bool) {
+	rest, ok := strings.CutPrefix(path, HTTPPathPrefix)
+	if !ok {
+		return types.NamespacedName{}, false
+	}
+	parts := strings.SplitN(rest, "/", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return types.NamespacedName{}, false
+	}
+	return types.NamespacedName{Namespace: parts[0], Name: parts[1]}, true
 }
