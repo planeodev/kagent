@@ -51,6 +51,11 @@ func (p *Provider) Authenticate(ctx context.Context, headers http.Header, query 
 }
 
 func (p *Provider) UpstreamAuth(request *http.Request, session auth.Session, destinationSessionID string) error {
+	if delegated, ok := session.(delegatedSession); ok {
+		request.Header.Del("Authorization")
+		request.Header.Set("X-User-Id", delegated.owner)
+		return nil
+	}
 	if session != nil && session.Principal().RuntimeBinding != nil {
 		if _, err := Session(auth.AuthSessionTo(request.Context(), session), p.store); err != nil {
 			return err
