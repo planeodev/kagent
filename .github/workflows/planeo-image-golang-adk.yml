@@ -1,9 +1,9 @@
 # 🍴 PLANEO FORK ONLY — the golang-adk image of our kagent integration branches: `planeo/main` (upstream main + our
 # fixes — where upstream PRs are cut) and the release lines `planeo/v<kagent version>` (that tag + the same fixes — what
-# we RUN, paired with the kagent we deploy; e.g. planeo/v1.0.0-alpha13). A THIN caller of the Vionix reusable
+# we RUN, paired with the kagent we deploy; e.g. planeo/v1.0.0). A THIN caller of the Vionix reusable
 # ohanalabs-ai/github-platform docker-multiarch-cicd.yaml: the `golang-adk` service of docker-compose.planeo.yaml,
 # multi-arch → ghcr.io/planeodev/kagent/golang-adk:<branch slug>-<sha7> on push, e.g. planeo-main-<sha7>,
-# planeo-v1.0.0-alpha13-<sha7> (PRs: …/golang-adk/pr/<n>:<sha7>).
+# planeo-v1.0.0-<sha7> (PRs: …/golang-adk/pr/<n>:<sha7>).
 # Pin it by that tag + its index digest (planeo-infra CLAUDE.md §9). Retire this file with the fork when upstream
 # releases the fixes (planeo-infra .github/upstream-watch-forks.yaml opens the issue).
 name: 🍴 planeo-image-golang-adk
@@ -26,8 +26,11 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: planeo-image-golang-adk-${{ github.ref }}
-  cancel-in-progress: true
+  # One group per EVENT; a push (release) build is never cancelled. A merged PR's `closed` run carries
+  # github.ref = the BASE branch, so `planeo-image-golang-adk-${{ github.ref }}` + cancel-in-progress let the PR cleanup
+  # cancel the branch build (2026-10-26: push runs 40354547393 @9597a38 and 40108114969 @2e374a9).
+  group: planeo-image-golang-adk-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'closed' }}
 
 jobs:
   build:
