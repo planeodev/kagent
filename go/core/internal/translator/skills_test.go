@@ -158,7 +158,7 @@ func TestCompilePrivateGitSkillAuthorization(t *testing.T) {
 				key = test.key
 			}
 			template := &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "skills", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{
-				ModelConfig: &corev1.LocalObjectReference{Name: modelConfig().Name}, SystemPrompt: "help",
+				ModelConfig: &v1alpha3.ObjectReference{Name: modelConfig().Name}, SystemPrompt: "help",
 				Skills: []v1alpha3.AgentTemplateSkill{{Name: "review", Source: v1alpha3.ArtifactSource{Git: &v1alpha3.GitArtifact{
 					URL: repository, Commit: strings.Repeat("a", 40), AuthorizationFrom: &v1alpha3.SecretKeyReference{Name: "skills-auth", Key: key},
 				}}}},

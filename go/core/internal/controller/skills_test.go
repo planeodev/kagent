@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	atev1alpha1 "go.ate.dev/substrate/pkg/api/v1alpha1"
+	atev1 "go.ate.dev/substrate/api/infra/k8s/ate/v1"
 	"istio.io/istio/pkg/kube/krt"
 	"istio.io/istio/pkg/kube/krt/krttest"
 	corev1 "k8s.io/api/core/v1"
@@ -27,7 +27,7 @@ func TestGitSkillSecretChangesReconcileReferences(t *testing.T) {
 			opts := krt.NewOptionsBuilder(stop, "git-skills", nil)
 			template := &kagentv1alpha3.AgentTemplate{
 				ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "assistant"},
-				Spec: kagentv1alpha3.AgentTemplateSpec{SystemPrompt: "help", ModelConfig: &corev1.LocalObjectReference{Name: "model"},
+				Spec: kagentv1alpha3.AgentTemplateSpec{SystemPrompt: "help", ModelConfig: &kagentv1alpha3.ObjectReference{Name: "model"},
 					Skills: []kagentv1alpha3.AgentTemplateSkill{{Name: "review", Source: kagentv1alpha3.ArtifactSource{Git: &kagentv1alpha3.GitArtifact{
 						URL: "https://github.com/acme/skills", Commit: strings.Repeat("a", 40),
 						AuthorizationFrom: &kagentv1alpha3.SecretKeyReference{Name: "git-auth", Key: "authorization"},
@@ -50,7 +50,7 @@ func TestGitSkillSecretChangesReconcileReferences(t *testing.T) {
 			selectedHarness.Spec.Substrate = kagentv1alpha3.RuntimeSubstratePolicy{
 				WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: kagentv1alpha3.RuntimeSnapshotPolicy{Location: "snapshots"},
 			}
-			mock := krttest.NewMock(t, []any{selectedHarness, &atev1alpha1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "default"}}})
+			mock := krttest.NewMock(t, []any{selectedHarness, &atev1.WorkerPool{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "default"}}})
 			secrets := krt.NewStaticCollection[*corev1.Secret](nil, nil, opts.WithName("Secrets")...)
 			models := krt.NewStaticCollection(nil, []*kagentv1alpha3.ModelConfig{{ObjectMeta: metav1.ObjectMeta{Namespace: "team-a", Name: "model"}, Spec: kagentv1alpha3.ModelConfigSpec{Provider: kagentv1alpha3.ModelProviderOpenAI, Model: "gpt-5"}}}, opts.WithName("Models")...)
 			configMaps := krttest.GetMockCollection[*corev1.ConfigMap](mock)
@@ -60,7 +60,7 @@ func TestGitSkillSecretChangesReconcileReferences(t *testing.T) {
 				AgentTemplates: krt.NewStaticCollection(nil, templates, opts.WithName("Templates")...),
 				Harnesses:      krttest.GetMockCollection[*kagentv1alpha3.Harness](mock), ResolvedModelConfigs: resolvedModels,
 				RemoteMCPServers: krttest.GetMockCollection[*kagentv1alpha3.RemoteMCPServer](mock), ConfigMaps: configMaps,
-				Secrets: secrets, WorkerPools: krttest.GetMockCollection[*atev1alpha1.WorkerPool](mock),
+				Secrets: secrets, WorkerPools: krttest.GetMockCollection[*atev1.WorkerPool](mock),
 			}, krt.NewStaticCollection[AgentRuntimeObservation](nil, nil, opts.WithName("Observations")...), opts, testRuntimeDefaults(), nil)
 			statuses := newAgentStatuses(agents, states, opts)
 			awaitReferenceFailure := func(message string) {
