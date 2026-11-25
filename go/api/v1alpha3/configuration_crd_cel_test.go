@@ -441,8 +441,13 @@ func TestConfigurationCRDValidation(t *testing.T) {
 		wantReject string
 	}{
 		{name: "template-ref", binding: SubAgentToolBinding{TemplateRef: &corev1.LocalObjectReference{Name: "context"}}},
-		{name: "missing-template-ref", wantReject: "templateRef: Required value"},
+		{name: "agent-ref", binding: SubAgentToolBinding{AgentRef: &corev1.LocalObjectReference{Name: "peer"}}},
+		{name: "both-refs", binding: SubAgentToolBinding{
+			TemplateRef: &corev1.LocalObjectReference{Name: "context"}, AgentRef: &corev1.LocalObjectReference{Name: "peer"},
+		}, wantReject: "exactly one of templateRef or agentRef must be specified"},
+		{name: "neither-ref", wantReject: "exactly one of templateRef or agentRef must be specified"},
 		{name: "empty-template-ref", binding: SubAgentToolBinding{TemplateRef: &corev1.LocalObjectReference{}}, wantReject: "templateRef.name must not be empty"},
+		{name: "empty-agent-ref", binding: SubAgentToolBinding{AgentRef: &corev1.LocalObjectReference{}}, wantReject: "agentRef.name must not be empty"},
 	} {
 		for _, inline := range []bool{false, true} {
 			name := fmt.Sprintf("subagent-%s-inline-%t", tc.name, inline)

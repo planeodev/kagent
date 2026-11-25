@@ -36,13 +36,21 @@ type provenanceEntry struct {
 
 // Builder assembles resolved inputs into an ADK agent configuration.
 type Builder struct {
-	ctx         krt.HandlerContext
-	collections translator.Collections
+	ctx             krt.HandlerContext
+	collections     translator.Collections
+	controlPlaneURL string
 }
 
 // NewBuilder constructs an ADK configuration builder.
 func NewBuilder(ctx krt.HandlerContext, collections translator.Collections) *Builder {
 	return &Builder{ctx: ctx, collections: collections}
+}
+
+// WithControlPlaneURL sets the controller origin that Dedicated subagents call
+// through the A2A gateway.
+func (c *Builder) WithControlPlaneURL(url string) *Builder {
+	c.controlPlaneURL = url
+	return c
 }
 
 type Result struct {
@@ -88,10 +96,51 @@ func (c *Builder) Build(ctx context.Context, input *translator.HarnessInput) (*R
 			return nil, err
 		}
 	}
+	if err := c.applyRemoteAgents(result, input); err != nil {
+		return nil, err
+	}
 	// The Python runtime needs an async SQLite driver; the Go runtime accepts
 	// this URL and strips the driver before opening the same durable database.
 	result.Config.SessionDbUrl = "sqlite+aiosqlite:////data/sessions.db"
 	return result, nil
+}
+
+// applyRemoteAgents adds the root agent's Dedicated subagents and the external
+// A2A agents declared by annotation (which grant no egress themselves). Binding names are unique across all three
+// kinds of subagent because each becomes a tool of the same name.
+func (c *Builder) applyRemoteAgents(result *Result, input *translator.HarnessInput) error {
+	if len(input.Root.Dedicated) > 0 && c.controlPlaneURL == "" {
+		return fmt.Errorf("control plane URL is required for Dedicated subagents")
+	}
+	remote := DedicatedRemoteAgents(c.controlPlaneURL, input.Root.Template.Namespace, input.Root.Dedicated)
+	external, err := ExternalRemoteAgents(c.controlPlaneURL, input.Annotations)
+	if err != nil {
+		return translator.NewValidationError("%w", err)
+	}
+	// An annotation is not an authorization: external origins must already be
+	// granted by an EgressPolicy the Agent references.
+	for _, agent := range external {
+		target, err := url.Parse(agent.Url)
+		if err != nil {
+			return translator.NewValidationError("remote agent %q: %w", agent.Name, err)
+		}
+		if origin := egress.Origin(target); !egress.Covers(input.EgressGrants, origin) {
+			return translator.NewValidationError("remote agent %q needs egress to %s, which must be granted by an EgressPolicy in spec.egressPolicyRefs", agent.Name, origin)
+		}
+	}
+	remote = append(remote, external...)
+	taken := map[string]struct{}{}
+	for _, child := range result.Config.SubAgents {
+		taken[child.Name] = struct{}{}
+	}
+	for _, agent := range remote {
+		if _, ok := taken[agent.Name]; ok {
+			return translator.NewValidationError("duplicate subagent binding name %q", agent.Name)
+		}
+		taken[agent.Name] = struct{}{}
+	}
+	result.Config.RemoteAgents = remote
+	return nil
 }
 
 func (c *Builder) compileAgent(ctx context.Context, input *translator.AgentInput) (*Result, error) {

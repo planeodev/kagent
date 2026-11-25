@@ -92,6 +92,48 @@ func TestDeclaredPeerIsDelegatedToTheSessionOwner(t *testing.T) {
 	}
 }
 
+func agentRefTool(peer string) v1alpha3.ToolBinding {
+	return v1alpha3.ToolBinding{SubAgent: &v1alpha3.SubAgentToolBinding{
+		Name: "peer_tool", Description: "peer", AgentRef: &corev1.LocalObjectReference{Name: peer},
+	}}
+}
+
+// A Dedicated subAgent.agentRef binding is a declaration, next to the annotation.
+func TestAgentRefBindingIsADeclaration(t *testing.T) {
+	f := newDelegationFixture(t)
+	inline := func(tools ...v1alpha3.ToolBinding) *v1alpha3.Agent {
+		agent := callerAgent(nil, "")
+		agent.Spec.Template.Inline = &v1alpha3.AgentTemplateSpec{Tools: tools}
+		return agent
+	}
+	referenced := func(tools ...v1alpha3.ToolBinding) *v1alpha3.AgentTemplate {
+		tpl := template("coordinator", nil)
+		tpl.Spec.Tools = tools
+		return tpl
+	}
+	peer := types.NamespacedName{Namespace: "team-a", Name: "peer"}
+	for name, test := range map[string]struct {
+		reader        client.Reader
+		wantDelegated bool
+	}{
+		"inline agentRef":                  {kube(t, inline(agentRefTool("peer"))), true},
+		"referenced-template agentRef":     {kube(t, callerAgent(nil, "coordinator"), referenced(agentRefTool("peer"))), true},
+		"agentRef to another name":         {kube(t, inline(agentRefTool("peer-2"))), false},
+		"shared templateRef is no peer":    {kube(t, inline(v1alpha3.ToolBinding{SubAgent: &v1alpha3.SubAgentToolBinding{Name: "peer", Description: "d", TemplateRef: &corev1.LocalObjectReference{Name: "peer"}}})), false},
+		"planeo annotation still declares": {kube(t, callerAgent(map[string]string{runtimeauth.AgentRefsAnnotation: "peer"}, "")), true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			principal := delegate(t, f, test.reader, peer)
+			if test.wantDelegated {
+				require.Nil(t, principal.RuntimeBinding, "a delegated call is not an actor any more")
+				require.Equal(t, "owner", principal.ID)
+				return
+			}
+			require.NotNil(t, principal.RuntimeBinding, "stays an actor, so upstream's actor policy decides")
+		})
+	}
+}
+
 func TestUndeclaredCrossNamespaceAndSelfStayActors(t *testing.T) {
 	f := newDelegationFixture(t)
 	declared := map[string]string{runtimeauth.AgentRefsAnnotation: "peer"}

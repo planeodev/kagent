@@ -83,13 +83,14 @@ func (d *PeerDelegator) DelegatePeer(ctx context.Context, target types.Namespace
 	return auth.AuthSessionTo(ctx, delegatedSession{owner: actor.owner, agent: callerNamespace + "/" + callerName, sessionID: actor.sessionID}), nil
 }
 
-// declares reports whether the caller Agent, or the AgentTemplate it references, lists peer in AgentRefsAnnotation.
+// declares reports whether the caller Agent, or the AgentTemplate it references, declares peer: either in
+// AgentRefsAnnotation or as a Dedicated subAgent.agentRef tool binding of its effective template.
 func (d *PeerDelegator) declares(ctx context.Context, caller types.NamespacedName, peer string) (bool, error) {
 	var agent v1alpha3.Agent
 	if err := d.kube.Get(ctx, caller, &agent); err != nil {
 		return false, client.IgnoreNotFound(err)
 	}
-	if listed(agent.GetAnnotations()[AgentRefsAnnotation], peer) {
+	if listed(agent.GetAnnotations()[AgentRefsAnnotation], peer) || bindsAgentRef(agent.Spec.Template.Inline, peer) {
 		return true, nil
 	}
 	ref := agent.Spec.Template.Ref
@@ -103,7 +104,20 @@ func (d *PeerDelegator) declares(ctx context.Context, caller types.NamespacedNam
 		}
 		return false, fmt.Errorf("read AgentTemplate %s/%s: %w", caller.Namespace, ref.Name, err)
 	}
-	return listed(template.GetAnnotations()[AgentRefsAnnotation], peer), nil
+	return listed(template.GetAnnotations()[AgentRefsAnnotation], peer) || bindsAgentRef(&template.Spec, peer), nil
+}
+
+// bindsAgentRef reports whether the template has a Dedicated subagent tool that references peer.
+func bindsAgentRef(template *v1alpha3.AgentTemplateSpec, peer string) bool {
+	if template == nil {
+		return false
+	}
+	for _, tool := range template.Tools {
+		if tool.SubAgent != nil && tool.SubAgent.AgentRef != nil && tool.SubAgent.AgentRef.Name == peer {
+			return true
+		}
+	}
+	return false
 }
 
 func listed(value, name string) bool {

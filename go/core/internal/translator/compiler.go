@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"istio.io/istio/pkg/kube/krt"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
@@ -50,8 +51,9 @@ type resolvedTemplateTree struct {
 
 // resolvedTemplate is one template and its validated Shared children.
 type resolvedTemplate struct {
-	Template *TemplateConfiguration
-	Shared   []resolvedTemplateBinding
+	Template  *TemplateConfiguration
+	Shared    []resolvedTemplateBinding
+	Dedicated []DedicatedBinding
 }
 
 // resolvedTemplateBinding preserves the parent-specific identity of a Shared child.
@@ -68,6 +70,13 @@ type HarnessInput struct {
 	Harness      *HarnessConfiguration
 	Root         *AgentInput
 	OutputSchema *ResolvedOutputSchema
+	// Annotations are the runnable Agent's annotations laid over those of its
+	// referenced AgentTemplate. Inline TemplateConfiguration has no Source, so the
+	// Agent's own metadata cannot be read from the template.
+	Annotations map[string]string
+	// EgressGrants are the origins granted by the Agent's referenced
+	// EgressPolicies (spec.egressPolicyRefs).
+	EgressGrants []string
 }
 
 // AgentInput contains resolved Kubernetes inputs for one agent.
@@ -77,6 +86,16 @@ type AgentInput struct {
 	Instruction         string
 	MCPTools            []ResolvedMCPTool
 	Shared              []AgentInputBinding
+	// Dedicated are same-namespace Agents invoked over A2A, each with its own Session.
+	Dedicated []DedicatedBinding
+}
+
+// DedicatedBinding is a subAgent.agentRef tool: the parent calls the referenced
+// same-namespace Agent through the controller's A2A gateway.
+type DedicatedBinding struct {
+	Name        string
+	Description string
+	AgentRef    corev1.LocalObjectReference
 }
 
 // ResolvedMCPTool pairs an exact tool allowlist with its resolved server.
@@ -150,7 +169,7 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 	if harnessCompiler == nil {
 		return nil, NewValidationError("Harness runtime is not supported by any compiler")
 	}
-	tree, err := c.resolveTree(ctx, harness, template)
+	tree, err := c.resolveTree(ctx, harness, template, agent.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +178,8 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 		return nil, err
 	}
 	input.AgentName = agent.Name
+	input.Annotations = effectiveAnnotations(agent, template)
+	input.EgressGrants = CompileEgressPolicies(c.ctx, c.collections, agent.Namespace, agent.Spec.EgressPolicyRefs).Access.Destinations
 	image, err := harnessImage(harness, c.images)
 	if err != nil {
 		return nil, err
@@ -184,6 +205,16 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 	return result, nil
 }
 
+// effectiveAnnotations lays the Agent's annotations over its referenced AgentTemplate's.
+func effectiveAnnotations(agent *v1alpha3.Agent, template *TemplateConfiguration) map[string]string {
+	merged := map[string]string{}
+	if template.Source != nil {
+		maps.Copy(merged, template.Source.Annotations)
+	}
+	maps.Copy(merged, agent.Annotations)
+	return merged
+}
+
 func harnessType(harness *HarnessConfiguration) HarnessType {
 	switch {
 	case harness.Spec.Kagent != nil:
@@ -199,7 +230,7 @@ func harnessType(harness *HarnessConfiguration) HarnessType {
 	}
 }
 
-func (c *Compiler) resolveTree(ctx context.Context, harness *HarnessConfiguration, root *TemplateConfiguration) (*resolvedTemplateTree, error) {
+func (c *Compiler) resolveTree(ctx context.Context, harness *HarnessConfiguration, root *TemplateConfiguration, agentName string) (*resolvedTemplateTree, error) {
 	seen, path, names := map[string]struct{}{}, map[string]struct{}{}, map[string]struct{}{}
 	var resolve func(*TemplateConfiguration, bool) (*resolvedTemplate, error)
 	resolve = func(template *TemplateConfiguration, child bool) (*resolvedTemplate, error) {
@@ -224,13 +255,30 @@ func (c *Compiler) resolveTree(ctx context.Context, harness *HarnessConfiguratio
 				continue
 			}
 			binding := tool.SubAgent
-			if binding.TemplateRef == nil || binding.TemplateRef.Name == "" {
-				return nil, NewValidationError("subagent %q requires templateRef.name", binding.Name)
+			if (binding.TemplateRef == nil) == (binding.AgentRef == nil) {
+				return nil, NewValidationError("subagent %q requires exactly one of templateRef or agentRef", binding.Name)
 			}
 			if _, ok := names[binding.Name]; ok {
-				return nil, NewValidationError("duplicate Shared AgentTemplate binding name %q", binding.Name)
+				return nil, NewValidationError("duplicate subagent binding name %q", binding.Name)
 			}
 			names[binding.Name] = struct{}{}
+			if binding.AgentRef != nil {
+				if binding.AgentRef.Name == "" {
+					return nil, NewValidationError("subagent %q requires agentRef.name", binding.Name)
+				}
+				if binding.AgentRef.Name == agentName {
+					return nil, NewValidationError("Dedicated subagent %q cannot reference its own Agent", binding.Name)
+				}
+				// The gateway authorizes a peer call against the calling Agent's own template only.
+				if child {
+					return nil, NewValidationError("Dedicated subagent %q must be declared on the Agent's own template, not a Shared one", binding.Name)
+				}
+				resolved.Dedicated = append(resolved.Dedicated, DedicatedBinding{Name: binding.Name, Description: binding.Description, AgentRef: *binding.AgentRef})
+				continue
+			}
+			if binding.TemplateRef.Name == "" {
+				return nil, NewValidationError("subagent %q requires templateRef.name", binding.Name)
+			}
 			key := types.NamespacedName{Namespace: template.Namespace, Name: binding.TemplateRef.Name}
 			childTemplate := krt.FetchOne(c.ctx, c.collections.AgentTemplates, krt.FilterObjectName(key))
 			if childTemplate == nil {
@@ -314,6 +362,7 @@ func (c *Compiler) buildInputs(ctx context.Context, tree *resolvedTemplateTree) 
 				return nil, err
 			}
 		}
+		input.Dedicated = slices.Clone(agent.Dedicated)
 		for _, binding := range agent.Shared {
 			child, err := build(binding.Agent)
 			if err != nil {

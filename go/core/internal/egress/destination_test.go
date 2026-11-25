@@ -70,3 +70,28 @@ func TestOrigin(t *testing.T) {
 		})
 	}
 }
+
+func TestCovers(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		grants []string
+		origin string
+		want   bool
+	}{
+		{name: "no grants", origin: "http://a.example.com:80"},
+		{name: "exact", grants: []string{"http://a.example.com:80"}, origin: "http://a.example.com:80", want: true},
+		{name: "default port is explicit", grants: []string{"https://a.example.com"}, origin: "https://a.example.com:443", want: true},
+		{name: "other scheme", grants: []string{"https://a.example.com:80"}, origin: "http://a.example.com:80"},
+		{name: "other port", grants: []string{"http://a.example.com:8080"}, origin: "http://a.example.com:80"},
+		{name: "other host", grants: []string{"http://b.example.com:80"}, origin: "http://a.example.com:80"},
+		{name: "wildcard covers one label", grants: []string{"https://*.example.com"}, origin: "https://a.example.com:443", want: true},
+		{name: "wildcard does not cover the apex", grants: []string{"https://*.example.com"}, origin: "https://example.com:443"},
+		{name: "wildcard does not cover two labels", grants: []string{"https://*.example.com"}, origin: "https://a.b.example.com:443"},
+		{name: "wildcard keeps the port", grants: []string{"https://*.example.com:8443"}, origin: "https://a.example.com:443"},
+		{name: "second grant matches", grants: []string{"http://b.example.com:80", "http://a.example.com:80"}, origin: "http://a.example.com:80", want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, Covers(tc.grants, tc.origin))
+		})
+	}
+}

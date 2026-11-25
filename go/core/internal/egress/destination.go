@@ -61,6 +61,34 @@ func ParseOrigin(raw string) (*url.URL, error) {
 	return u, nil
 }
 
+// Covers reports whether origin falls under one of the granted origins. A
+// grant covers an origin with the same scheme, port and host; a wildcard grant
+// (https://*.example.com) covers hosts with exactly one more leftmost label,
+// the semantics ParseOrigin accepts and Substrate enforces.
+func Covers(grants []string, origin string) bool {
+	target, err := ParseOrigin(origin)
+	if err != nil {
+		return false
+	}
+	for _, raw := range grants {
+		grant, err := ParseOrigin(raw)
+		if err != nil || grant.Scheme != target.Scheme || grant.Port() != target.Port() {
+			continue
+		}
+		if rest, wildcard := strings.CutPrefix(grant.Hostname(), "*."); wildcard {
+			label, parent, found := strings.Cut(target.Hostname(), ".")
+			if found && label != "" && parent == rest {
+				return true
+			}
+			continue
+		}
+		if grant.Hostname() == target.Hostname() {
+			return true
+		}
+	}
+	return false
+}
+
 // Access is a compiled network grant. It contains references,
 // never Secret values.
 type Access struct {
