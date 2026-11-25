@@ -22,6 +22,7 @@ import (
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
 	"github.com/kagent-dev/kagent/go/core/internal/translator"
+	"github.com/kagent-dev/kagent/go/core/internal/translator/adkconfig"
 	byotranslator "github.com/kagent-dev/kagent/go/core/internal/translator/byo"
 	claudetranslator "github.com/kagent-dev/kagent/go/core/internal/translator/claude"
 	codextranslator "github.com/kagent-dev/kagent/go/core/internal/translator/codex"
@@ -890,7 +891,7 @@ func TestCompileAgentRejectsInvalidSubagentReferences(t *testing.T) {
 	}{
 		{
 			name:      "missing reference",
-			wantError: "requires templateRef.name",
+			wantError: "exactly one of templateRef or agentRef",
 		},
 		{
 			name:      "empty reference",
@@ -909,6 +910,134 @@ func TestCompileAgentRejectsInvalidSubagentReferences(t *testing.T) {
 			require.ErrorAs(t, err, &validationError)
 		})
 	}
+}
+
+func TestCompileAgentDedicatedSubAgent(t *testing.T) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "kagent", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:    &v1alpha3.KagentHarness{},
+			Workload:  v1alpha3.HarnessWorkload{Image: new("example.com/kagent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+			Substrate: v1alpha3.RuntimeSubstratePolicy{WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.RuntimeSnapshotPolicy{Location: "snapshots"}},
+		},
+	}
+	dedicated := func(name, peer string) v1alpha3.ToolBinding {
+		return v1alpha3.ToolBinding{SubAgent: &v1alpha3.SubAgentToolBinding{Name: name, Description: "T", AgentRef: &corev1.LocalObjectReference{Name: peer}}}
+	}
+	shared := func(name, target string) v1alpha3.ToolBinding {
+		return v1alpha3.ToolBinding{SubAgent: &v1alpha3.SubAgentToolBinding{Name: name, Description: name, TemplateRef: &corev1.LocalObjectReference{Name: target}}}
+	}
+	template := func(tools ...v1alpha3.ToolBinding) *v1alpha3.AgentTemplate {
+		return &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "planner", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{
+			ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}, SystemPrompt: "plan", Tools: tools,
+		}}
+	}
+	mcp := v1alpha3.ToolBinding{MCP: &v1alpha3.MCPToolBinding{Server: corev1.TypedObjectReference{Kind: "RemoteMCPServer", Name: "search"}}}
+
+	t.Run("compiles to a remote A2A agent through the controller", func(t *testing.T) {
+		revision, err := compiler(t, modelConfig(), harness, remoteMCPServer("search", "https://search.example.com/mcp")).
+			CompileAgent(t.Context(), inlineAgent(harness, template(dedicated("telemetry_agent", "telemetry-agent"), mcp)))
+		require.NoError(t, err)
+		var config configv1.ADKConfig
+		require.NoError(t, runtimeconfig.Unmarshal(revision.ConfigJSON, &config))
+		require.Len(t, config.Agent.RemoteAgents, 1)
+		remote := config.Agent.RemoteAgents[0]
+		require.Equal(t, "telemetry_agent", remote.Name)
+		require.Equal(t, "http://kagent-controller.kagent:8083/agents/test/telemetry-agent/.well-known/agent-card.json", remote.Url)
+		require.Empty(t, config.Agent.SubAgents)
+		require.Len(t, config.Agent.HttpTools, 1)
+		require.Contains(t, revision.EgressDestinations, "http://kagent-controller.kagent:8083")
+	})
+	t.Run("rejects a reference to its own Agent", func(t *testing.T) {
+		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), inlineAgent(harness, template(dedicated("me", "runnable-agent"))))
+		require.ErrorContains(t, err, "cannot reference its own Agent")
+		var validationError *translator.ValidationError
+		require.ErrorAs(t, err, &validationError)
+	})
+	t.Run("rejects a binding name used by a Shared and a Dedicated binding", func(t *testing.T) {
+		child := &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "child", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}}}
+		_, err := compiler(t, modelConfig(), harness, child).CompileAgent(t.Context(), inlineAgent(harness, template(shared("helper", "child"), dedicated("helper", "peer"))))
+		require.ErrorContains(t, err, "duplicate")
+	})
+	t.Run("rejects two Dedicated bindings with one name", func(t *testing.T) {
+		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), inlineAgent(harness, template(dedicated("helper", "a"), dedicated("helper", "b"))))
+		require.ErrorContains(t, err, "duplicate")
+	})
+	t.Run("rejects both refs", func(t *testing.T) {
+		both := v1alpha3.ToolBinding{SubAgent: &v1alpha3.SubAgentToolBinding{Name: "x", Description: "x",
+			TemplateRef: &corev1.LocalObjectReference{Name: "child"}, AgentRef: &corev1.LocalObjectReference{Name: "peer"}}}
+		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), inlineAgent(harness, template(both)))
+		require.ErrorContains(t, err, "exactly one of templateRef or agentRef")
+	})
+	t.Run("rejects an empty agentRef name", func(t *testing.T) {
+		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), inlineAgent(harness, template(dedicated("helper", ""))))
+		require.ErrorContains(t, err, "requires agentRef.name")
+	})
+	t.Run("rejects a Dedicated binding inside a Shared template", func(t *testing.T) {
+		child := &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "child", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{
+			ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}, Tools: []v1alpha3.ToolBinding{dedicated("peer_tool", "peer")},
+		}}
+		_, err := compiler(t, modelConfig(), harness, child).CompileAgent(t.Context(), inlineAgent(harness, template(shared("helper", "child"))))
+		require.ErrorContains(t, err, "must be declared on the Agent's own template")
+	})
+}
+
+func TestCompileAgentExternalRemoteAgentsAnnotation(t *testing.T) {
+	harness := &v1alpha3.Harness{
+		ObjectMeta: metav1.ObjectMeta{Name: "kagent", Namespace: "test"},
+		Spec: v1alpha3.HarnessSpec{
+			Kagent:    &v1alpha3.KagentHarness{},
+			Workload:  v1alpha3.HarnessWorkload{Image: new("example.com/kagent@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")},
+			Substrate: v1alpha3.RuntimeSubstratePolicy{WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.RuntimeSnapshotPolicy{Location: "snapshots"}},
+		},
+	}
+	value := `[{"name":"wfo_search","description":"W","url":"http://wfo-search.troubleshooting.svc.cluster.local:8080/.well-known/agent-card.json","timeoutSeconds":1800}]`
+	behavior := &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "planner", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{
+		ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}, SystemPrompt: "plan",
+		Tools: []v1alpha3.ToolBinding{{SubAgent: &v1alpha3.SubAgentToolBinding{Name: "wfo_search", Description: "d", AgentRef: &corev1.LocalObjectReference{Name: "peer"}}}},
+	}}
+	plain := &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{
+		ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}, SystemPrompt: "plan",
+	}}
+
+	t.Run("Agent annotation on an inline template", func(t *testing.T) {
+		agent := inlineAgent(harness, plain)
+		agent.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: value}
+		revision, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), agent)
+		require.NoError(t, err)
+		var config configv1.ADKConfig
+		require.NoError(t, runtimeconfig.Unmarshal(revision.ConfigJSON, &config))
+		require.Len(t, config.Agent.RemoteAgents, 1)
+		require.Equal(t, "wfo_search", config.Agent.RemoteAgents[0].Name)
+		require.Contains(t, revision.EgressDestinations, "http://wfo-search.troubleshooting.svc.cluster.local:8080")
+	})
+	t.Run("AgentTemplate annotation on a referenced template", func(t *testing.T) {
+		annotated := plain.DeepCopy()
+		annotated.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: value}
+		agent := &v1alpha3.Agent{ObjectMeta: metav1.ObjectMeta{Name: "runnable-agent", Namespace: "test"}, Spec: v1alpha3.AgentSpec{
+			Template:   v1alpha3.AgentTemplateSource{Ref: &corev1.LocalObjectReference{Name: annotated.Name}},
+			HarnessRef: corev1.LocalObjectReference{Name: harness.Name},
+		}}
+		revision, err := compiler(t, modelConfig(), harness, annotated).CompileAgent(t.Context(), agent)
+		require.NoError(t, err)
+		var config configv1.ADKConfig
+		require.NoError(t, runtimeconfig.Unmarshal(revision.ConfigJSON, &config))
+		require.Len(t, config.Agent.RemoteAgents, 1)
+	})
+	t.Run("names are unique across Dedicated and external agents", func(t *testing.T) {
+		agent := inlineAgent(harness, behavior)
+		agent.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: value}
+		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), agent)
+		require.ErrorContains(t, err, "duplicate")
+	})
+	t.Run("an invalid annotation is a validation error", func(t *testing.T) {
+		agent := inlineAgent(harness, plain)
+		agent.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: "nope"}
+		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), agent)
+		var validationError *translator.ValidationError
+		require.ErrorAs(t, err, &validationError)
+		require.ErrorContains(t, err, adkconfig.ExternalA2AAnnotation)
+	})
 }
 
 func TestCompileAgentRejectsInvalidSources(t *testing.T) {

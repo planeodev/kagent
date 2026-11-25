@@ -71,7 +71,8 @@ type MCPToolBinding struct {
 	RequireApproval bool `json:"requireApproval,omitempty"`
 }
 
-// SubAgentToolBinding exposes a same-namespace AgentTemplate as a logical tool.
+// SubAgentToolBinding exposes a same-namespace AgentTemplate or Agent as a logical tool.
+// +kubebuilder:validation:XValidation:rule="has(self.templateRef) != has(self.agentRef)",message="exactly one of templateRef or agentRef must be specified"
 type SubAgentToolBinding struct {
 	// +kubebuilder:validation:MinLength=1
 	// +required
@@ -82,11 +83,12 @@ type SubAgentToolBinding struct {
 	Description string `json:"description"`
 	// TemplateRef selects a Shared subagent compiled into the parent's runtime using its Harness.
 	// +kubebuilder:validation:XValidation:rule="has(self.name) && self.name != ''",message="templateRef.name must not be empty"
-	// +required
-	TemplateRef *corev1.LocalObjectReference `json:"templateRef"`
-
-	// Deferred until Dedicated subagents can create and invoke their own Session.
-	// AgentRef *corev1.LocalObjectReference `json:"agentRef,omitempty"`
+	// +optional
+	TemplateRef *corev1.LocalObjectReference `json:"templateRef,omitempty"`
+	// AgentRef selects a Dedicated subagent with its own Harness and Session, invoked over A2A.
+	// +kubebuilder:validation:XValidation:rule="has(self.name) && self.name != ''",message="agentRef.name must not be empty"
+	// +optional
+	AgentRef *corev1.LocalObjectReference `json:"agentRef,omitempty"`
 }
 
 // ToolBinding selects exactly one MCP or subagent tool source.

@@ -27,7 +27,7 @@ type Compiler struct {
 var _ translator.HarnessCompiler = (*Compiler)(nil)
 
 func NewCompiler(ctx krt.HandlerContext, collections translator.Collections, settings *configv1.RuntimeDefaultsConfig) *Compiler {
-	return &Compiler{settings: settings, config: adkconfig.NewBuilder(ctx, collections)}
+	return &Compiler{settings: settings, config: adkconfig.NewBuilder(ctx, collections).WithControlPlaneURL(settings.GetControlPlaneUrl())}
 }
 
 func (c *Compiler) Compile(ctx context.Context, input *translator.HarnessInput) (*translator.CompileResult, error) {
