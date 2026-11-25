@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/netip"
 	"net/url"
-	"slices"
 	"strings"
 	"time"
 
@@ -29,30 +28,29 @@ type externalRemoteAgent struct {
 }
 
 // ExternalRemoteAgents reads ExternalA2AAnnotation and returns the ADK remote
-// agents plus the egress origins they need. controlPlaneURL is the controller:
-// kagent Agents must be declared with subAgent.agentRef so the gateway
-// authorizes the call.
-func ExternalRemoteAgents(controlPlaneURL string, annotations map[string]string) ([]*configv1.ADKRemoteAgentConfig, []string, error) {
+// agents. It grants no egress: the caller must check each agent's origin against
+// the Agent's EgressPolicies. controlPlaneURL is the controller: kagent Agents
+// must be declared with subAgent.agentRef so the gateway authorizes the call.
+func ExternalRemoteAgents(controlPlaneURL string, annotations map[string]string) ([]*configv1.ADKRemoteAgentConfig, error) {
 	raw := strings.TrimSpace(annotations[ExternalA2AAnnotation])
 	if raw == "" {
-		return nil, nil, nil
+		return nil, nil
 	}
 	var entries []externalRemoteAgent
 	if err := json.Unmarshal([]byte(raw), &entries); err != nil {
-		return nil, nil, fmt.Errorf("annotation %s must be a JSON list of {name, description, url, timeoutSeconds}: %w", ExternalA2AAnnotation, err)
+		return nil, fmt.Errorf("annotation %s must be a JSON list of {name, description, url, timeoutSeconds}: %w", ExternalA2AAnnotation, err)
 	}
 	controller, err := url.Parse(controlPlaneURL)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse control plane URL: %w", err)
+		return nil, fmt.Errorf("parse control plane URL: %w", err)
 	}
 	controllerOrigin := egress.Origin(controller)
 
 	var agents []*configv1.ADKRemoteAgentConfig
-	var origins []string
 	names := map[string]struct{}{}
 	for i, entry := range entries {
-		fail := func(format string, args ...any) ([]*configv1.ADKRemoteAgentConfig, []string, error) {
-			return nil, nil, fmt.Errorf("annotation %s entry %d: %s", ExternalA2AAnnotation, i, fmt.Sprintf(format, args...))
+		fail := func(format string, args ...any) ([]*configv1.ADKRemoteAgentConfig, error) {
+			return nil, fmt.Errorf("annotation %s entry %d: %s", ExternalA2AAnnotation, i, fmt.Sprintf(format, args...))
 		}
 		switch {
 		case entry.Name == "":
@@ -71,8 +69,7 @@ func ExternalRemoteAgents(controlPlaneURL string, annotations map[string]string)
 		if _, err := netip.ParseAddr(target.Hostname()); err == nil {
 			return fail("url %q for %q uses an IP-literal host; Substrate egress requires a DNS name", entry.URL, entry.Name)
 		}
-		origin := egress.Origin(target)
-		if origin == controllerOrigin {
+		if egress.Origin(target) == controllerOrigin {
 			return fail("url %q for %q points at the controller: use subAgent.agentRef for kagent Agents", entry.URL, entry.Name)
 		}
 		timeout := remoteAgentTimeout
@@ -85,8 +82,6 @@ func ExternalRemoteAgents(controlPlaneURL string, annotations map[string]string)
 		agents = append(agents, &configv1.ADKRemoteAgentConfig{
 			Name: entry.Name, Description: entry.Description, Url: entry.URL, Timeout: durationpb.New(timeout),
 		})
-		origins = append(origins, origin)
 	}
-	slices.Sort(origins)
-	return agents, slices.Compact(origins), nil
+	return agents, nil
 }

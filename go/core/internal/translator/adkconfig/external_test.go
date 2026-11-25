@@ -13,18 +13,16 @@ func TestExternalRemoteAgents(t *testing.T) {
 		name        string
 		annotations map[string]string
 		wantAgents  int
-		wantOrigins []string
 		wantError   string
-		check       func(*testing.T, []string)
 	}{
 		{name: "none"},
 		{name: "empty annotation", annotations: map[string]string{ExternalA2AAnnotation: ""}},
 		{
 			name: "wfo-search", annotations: map[string]string{ExternalA2AAnnotation: "[" + wfo + "]"},
-			wantAgents: 1, wantOrigins: []string{"http://wfo-search.troubleshooting.svc.cluster.local:8080"},
+			wantAgents: 1,
 		},
 		{
-			name: "missing timeoutSeconds", wantAgents: 1, wantOrigins: []string{"http://wfo.example.com:80"},
+			name: "missing timeoutSeconds", wantAgents: 1,
 			annotations: map[string]string{ExternalA2AAnnotation: `[{"name":"wfo","description":"W","url":"http://wfo.example.com/card.json"}]`},
 		},
 		{
@@ -57,14 +55,13 @@ func TestExternalRemoteAgents(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			agents, origins, err := ExternalRemoteAgents("http://kagent-controller.kagent:8083", tc.annotations)
+			agents, err := ExternalRemoteAgents("http://kagent-controller.kagent:8083", tc.annotations)
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 				return
 			}
 			require.NoError(t, err)
 			require.Len(t, agents, tc.wantAgents)
-			require.Equal(t, tc.wantOrigins, origins)
 			if tc.wantAgents == 0 {
 				require.Nil(t, agents)
 				return
@@ -76,7 +73,7 @@ func TestExternalRemoteAgents(t *testing.T) {
 }
 
 func TestExternalRemoteAgentsRejectsTheControllerOrigin(t *testing.T) {
-	_, _, err := ExternalRemoteAgents("http://kagent-controller.kagent:8083", map[string]string{
+	_, err := ExternalRemoteAgents("http://kagent-controller.kagent:8083", map[string]string{
 		ExternalA2AAnnotation: `[{"name":"peer","description":"P","url":"http://kagent-controller.kagent:8083/agents/ns/peer/.well-known/agent-card.json"}]`,
 	})
 	require.ErrorContains(t, err, "use subAgent.agentRef for kagent Agents")

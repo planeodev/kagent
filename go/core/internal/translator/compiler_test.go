@@ -991,52 +991,94 @@ func TestCompileAgentExternalRemoteAgentsAnnotation(t *testing.T) {
 			Substrate: v1alpha3.RuntimeSubstratePolicy{WorkerPoolRef: corev1.LocalObjectReference{Name: "default"}, SnapshotPolicy: v1alpha3.RuntimeSnapshotPolicy{Location: "snapshots"}},
 		},
 	}
-	value := `[{"name":"wfo_search","description":"W","url":"http://wfo-search.troubleshooting.svc.cluster.local:8080/.well-known/agent-card.json","timeoutSeconds":1800}]`
-	behavior := &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "planner", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{
-		ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}, SystemPrompt: "plan",
-		Tools: []v1alpha3.ToolBinding{{SubAgent: &v1alpha3.SubAgentToolBinding{Name: "wfo_search", Description: "d", AgentRef: &corev1.LocalObjectReference{Name: "peer"}}}},
-	}}
+	const origin = "http://wfo-search.troubleshooting.svc.cluster.local:8080"
+	value := `[{"name":"wfo_search","description":"W","url":"` + origin + `/.well-known/agent-card.json","timeoutSeconds":1800}]`
+	policy := func(name string, origins ...string) *v1alpha3.EgressPolicy {
+		destinations := make([]v1alpha3.EgressDestination, 0, len(origins))
+		for _, o := range origins {
+			destinations = append(destinations, v1alpha3.EgressDestination{Origin: o})
+		}
+		return &v1alpha3.EgressPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: "test", Name: name}, Spec: v1alpha3.EgressPolicySpec{Destinations: destinations}}
+	}
 	plain := &v1alpha3.AgentTemplate{ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: "test"}, Spec: v1alpha3.AgentTemplateSpec{
 		ModelConfig: &v1alpha3.ObjectReference{Name: "default-model"}, SystemPrompt: "plan",
 	}}
+	dedicated := plain.DeepCopy()
+	dedicated.Spec.Tools = []v1alpha3.ToolBinding{{SubAgent: &v1alpha3.SubAgentToolBinding{Name: "wfo_search", Description: "d", AgentRef: &corev1.LocalObjectReference{Name: "peer"}}}}
+	refs := func(names ...string) []corev1.LocalObjectReference {
+		var refs []corev1.LocalObjectReference
+		for _, name := range names {
+			refs = append(refs, corev1.LocalObjectReference{Name: name})
+		}
+		return refs
+	}
 
-	t.Run("Agent annotation on an inline template", func(t *testing.T) {
-		agent := inlineAgent(harness, plain)
-		agent.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: value}
-		revision, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), agent)
-		require.NoError(t, err)
-		var config configv1.ADKConfig
-		require.NoError(t, runtimeconfig.Unmarshal(revision.ConfigJSON, &config))
-		require.Len(t, config.Agent.RemoteAgents, 1)
-		require.Equal(t, "wfo_search", config.Agent.RemoteAgents[0].Name)
-		require.Contains(t, revision.EgressDestinations, "http://wfo-search.troubleshooting.svc.cluster.local:8080")
-	})
+	for _, tc := range []struct {
+		name        string
+		template    *v1alpha3.AgentTemplate
+		annotations map[string]string
+		policies    []*v1alpha3.EgressPolicy
+		refs        []string
+		wantError   []string
+	}{
+		{name: "exact origin granted by a referenced policy", template: plain, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: value},
+			policies: []*v1alpha3.EgressPolicy{policy("wfo", origin)}, refs: []string{"wfo"}},
+		{name: "wildcard origin granted by a referenced policy", template: plain, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: value},
+			policies: []*v1alpha3.EgressPolicy{policy("wfo", "http://*.troubleshooting.svc.cluster.local:8080")}, refs: []string{"wfo"}},
+		{name: "no policy", template: plain, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: value},
+			wantError: []string{origin, "spec.egressPolicyRefs"}},
+		{name: "policy exists but is not referenced", template: plain, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: value},
+			policies: []*v1alpha3.EgressPolicy{policy("wfo", origin)}, wantError: []string{origin}},
+		{name: "referenced policy covers a different origin", template: plain, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: value},
+			policies: []*v1alpha3.EgressPolicy{policy("other", "http://other.example.com:8080")}, refs: []string{"other"}, wantError: []string{origin}},
+		{name: "referenced policy covers another port", template: plain, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: value},
+			policies: []*v1alpha3.EgressPolicy{policy("wfo", "http://wfo-search.troubleshooting.svc.cluster.local:9090")}, refs: []string{"wfo"}, wantError: []string{origin}},
+		{name: "names are unique across Dedicated and external agents", template: dedicated, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: value},
+			policies: []*v1alpha3.EgressPolicy{policy("wfo", origin)}, refs: []string{"wfo"}, wantError: []string{"duplicate"}},
+		{name: "an invalid annotation is a validation error", template: plain, annotations: map[string]string{adkconfig.ExternalA2AAnnotation: "nope"},
+			wantError: []string{adkconfig.ExternalA2AAnnotation}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := inlineAgent(harness, tc.template)
+			agent.Annotations = tc.annotations
+			agent.Spec.EgressPolicyRefs = refs(tc.refs...)
+			objects := []any{modelConfig(), harness}
+			for _, p := range tc.policies {
+				objects = append(objects, p)
+			}
+			revision, err := compiler(t, objects...).CompileAgent(t.Context(), agent)
+			if tc.wantError != nil {
+				var validationError *translator.ValidationError
+				require.ErrorAs(t, err, &validationError)
+				for _, want := range tc.wantError {
+					require.ErrorContains(t, err, want)
+				}
+				return
+			}
+			require.NoError(t, err)
+			var config configv1.ADKConfig
+			require.NoError(t, runtimeconfig.Unmarshal(revision.ConfigJSON, &config))
+			require.Len(t, config.Agent.RemoteAgents, 1)
+			require.Equal(t, "wfo_search", config.Agent.RemoteAgents[0].Name)
+			// The revision's own egress never gains the origin; the EgressPolicy grants it live.
+			require.NotContains(t, revision.EgressDestinations, origin)
+		})
+	}
+
 	t.Run("AgentTemplate annotation on a referenced template", func(t *testing.T) {
 		annotated := plain.DeepCopy()
 		annotated.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: value}
 		agent := &v1alpha3.Agent{ObjectMeta: metav1.ObjectMeta{Name: "runnable-agent", Namespace: "test"}, Spec: v1alpha3.AgentSpec{
-			Template:   v1alpha3.AgentTemplateSource{Ref: &corev1.LocalObjectReference{Name: annotated.Name}},
-			HarnessRef: corev1.LocalObjectReference{Name: harness.Name},
+			Template:         v1alpha3.AgentTemplateSource{Ref: &corev1.LocalObjectReference{Name: annotated.Name}},
+			HarnessRef:       corev1.LocalObjectReference{Name: harness.Name},
+			EgressPolicyRefs: refs("wfo"),
 		}}
-		revision, err := compiler(t, modelConfig(), harness, annotated).CompileAgent(t.Context(), agent)
+		revision, err := compiler(t, modelConfig(), harness, annotated, policy("wfo", origin)).CompileAgent(t.Context(), agent)
 		require.NoError(t, err)
 		var config configv1.ADKConfig
 		require.NoError(t, runtimeconfig.Unmarshal(revision.ConfigJSON, &config))
 		require.Len(t, config.Agent.RemoteAgents, 1)
-	})
-	t.Run("names are unique across Dedicated and external agents", func(t *testing.T) {
-		agent := inlineAgent(harness, behavior)
-		agent.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: value}
-		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), agent)
-		require.ErrorContains(t, err, "duplicate")
-	})
-	t.Run("an invalid annotation is a validation error", func(t *testing.T) {
-		agent := inlineAgent(harness, plain)
-		agent.Annotations = map[string]string{adkconfig.ExternalA2AAnnotation: "nope"}
-		_, err := compiler(t, modelConfig(), harness).CompileAgent(t.Context(), agent)
-		var validationError *translator.ValidationError
-		require.ErrorAs(t, err, &validationError)
-		require.ErrorContains(t, err, adkconfig.ExternalA2AAnnotation)
+		require.NotContains(t, revision.EgressDestinations, origin)
 	})
 }
 

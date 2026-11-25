@@ -106,16 +106,27 @@ func (c *Builder) Build(ctx context.Context, input *translator.HarnessInput) (*R
 }
 
 // applyRemoteAgents adds the root agent's Dedicated subagents and the external
-// A2A agents declared by annotation. Binding names are unique across all three
+// A2A agents declared by annotation (which grant no egress themselves). Binding names are unique across all three
 // kinds of subagent because each becomes a tool of the same name.
 func (c *Builder) applyRemoteAgents(result *Result, input *translator.HarnessInput) error {
 	if len(input.Root.Dedicated) > 0 && c.controlPlaneURL == "" {
 		return fmt.Errorf("control plane URL is required for Dedicated subagents")
 	}
 	remote := DedicatedRemoteAgents(c.controlPlaneURL, input.Root.Template.Namespace, input.Root.Dedicated)
-	external, origins, err := ExternalRemoteAgents(c.controlPlaneURL, input.Annotations)
+	external, err := ExternalRemoteAgents(c.controlPlaneURL, input.Annotations)
 	if err != nil {
 		return translator.NewValidationError("%w", err)
+	}
+	// An annotation is not an authorization: external origins must already be
+	// granted by an EgressPolicy the Agent references.
+	for _, agent := range external {
+		target, err := url.Parse(agent.Url)
+		if err != nil {
+			return translator.NewValidationError("remote agent %q: %w", agent.Name, err)
+		}
+		if origin := egress.Origin(target); !egress.Covers(input.EgressGrants, origin) {
+			return translator.NewValidationError("remote agent %q needs egress to %s, which must be granted by an EgressPolicy in spec.egressPolicyRefs", agent.Name, origin)
+		}
 	}
 	remote = append(remote, external...)
 	taken := map[string]struct{}{}
@@ -129,7 +140,6 @@ func (c *Builder) applyRemoteAgents(result *Result, input *translator.HarnessInp
 		taken[agent.Name] = struct{}{}
 	}
 	result.Config.RemoteAgents = remote
-	result.Egress = append(result.Egress, origins...)
 	return nil
 }
 

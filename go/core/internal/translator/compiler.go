@@ -74,6 +74,9 @@ type HarnessInput struct {
 	// referenced AgentTemplate. Inline TemplateConfiguration has no Source, so the
 	// Agent's own metadata cannot be read from the template.
 	Annotations map[string]string
+	// EgressGrants are the origins granted by the Agent's referenced
+	// EgressPolicies (spec.egressPolicyRefs).
+	EgressGrants []string
 }
 
 // AgentInput contains resolved Kubernetes inputs for one agent.
@@ -176,6 +179,7 @@ func (c *Compiler) compileConfiguration(ctx context.Context, agent *v1alpha3.Age
 	}
 	input.AgentName = agent.Name
 	input.Annotations = effectiveAnnotations(agent, template)
+	input.EgressGrants = CompileEgressPolicies(c.ctx, c.collections, agent.Namespace, agent.Spec.EgressPolicyRefs).Access.Destinations
 	image, err := harnessImage(harness, c.images)
 	if err != nil {
 		return nil, err
